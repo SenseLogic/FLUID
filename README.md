@@ -19,9 +19,12 @@ fluid_uv <input video file path> <output video file path> [<options>]
 ## Options
 
 ```
---factor <factor=4>
+--slowdown-factor <slowdown_factor=4>
+--flow-estimation-scale <flow_estimation_scale=1.0>
+--crop <left_distance> <right_distance> <top_distance> <bottom_distance>
+--max-width <maximum_width=0>
+--max-height <maximum_height=0>
 --compression <compression=22>
---scale <scale=1.0>
 --mute
 ```
 
@@ -32,7 +35,7 @@ fluid input_video.mp4 output_video.mp4
 ```
 
 ```
-fluid input_video.mp4 output_video.mp4 --factor 2
+fluid input_video.mp4 output_video.mp4 --slowdown-factor 2
 ```
 
 ```
@@ -40,7 +43,7 @@ fluid input_video.mp4 output_video.mp4 --compression 22
 ```
 
 ```
-fluid input_video.mp4 output_video.mp4 --factor 8 --compression 22 --scale 0.5
+fluid input_video.mp4 output_video.mp4 --slowdown-factor 8 --compression 22 --flow-estimation-scale 0.5
 ```
 
 ```
@@ -61,7 +64,7 @@ Run `install_ffmpeg.bat` then `install_packages.bat` or `install_uv_packages.bat
 ## Limitations
 
 - Only processes `.mp4` input and output files.
-- `--factor` defaults to 4 and must be an integer >= 2 (2, 4, 8, ... work best).
+- `--slowdown-factor` defaults to 4 and must be an integer >= 2 (2, 4, 8, ... work best).
 
 ## Version
 

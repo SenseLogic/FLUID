@@ -8,6 +8,7 @@ from typing import Any;
 try:
 
     import argparse;
+    import cv2;
     import ffmpeg;
     import mimetypes;
     import numpy as np;
@@ -36,8 +37,8 @@ warnings.filterwarnings( "ignore" );
 MODEL_NAME = "flownet.pkl";
 MODEL_VERSION = 4.25;
 DEFAULT_COMPRESSION = 22;
-DEFAULT_FACTOR = 4;
-DEFAULT_SCALE = 1.0;
+DEFAULT_SLOWDOWN_FACTOR = 4;
+DEFAULT_FLOW_ESTIMATION_SCALE = 1.0;
 
 APPLICATION_FOLDER_PATH = Path( __file__ ).resolve().parent;
 MODEL_FOLDER_PATH = APPLICATION_FOLDER_PATH / "MODEL";
@@ -1173,10 +1174,42 @@ def parse_arguments(
         );
 
     parser.add_argument(
-        "--factor",
+        "--slowdown-factor",
         type=int,
-        default=DEFAULT_FACTOR,
-        help=f"Slowdown factor (default: {DEFAULT_FACTOR}; 2, 4, 8, ...)"
+        dest="slowdown_factor",
+        default=DEFAULT_SLOWDOWN_FACTOR,
+        help=f"Slowdown factor (default: {DEFAULT_SLOWDOWN_FACTOR}; 2, 4, 8, ...)"
+        );
+
+    parser.add_argument(
+        "--flow-estimation-scale",
+        type=float,
+        dest="flow_estimation_scale",
+        default=DEFAULT_FLOW_ESTIMATION_SCALE,
+        help=f"Flow estimation scale (default: {DEFAULT_FLOW_ESTIMATION_SCALE}; use 0.5 for 1080p+/4K)"
+        );
+
+    parser.add_argument(
+        "--crop",
+        nargs=4,
+        type=float,
+        metavar=( "LEFT", "RIGHT", "TOP", "BOTTOM" ),
+        default=None,
+        help="Crop distances before processing (< 1 = ratio, >= 1 = pixels)"
+        );
+
+    parser.add_argument(
+        "--max-width",
+        type=int,
+        default=0,
+        help="Maximum output width in pixels (0 = no limit)"
+        );
+
+    parser.add_argument(
+        "--max-height",
+        type=int,
+        default=0,
+        help="Maximum output height in pixels (0 = no limit)"
         );
 
     parser.add_argument(
@@ -1187,16 +1220,15 @@ def parse_arguments(
         );
 
     parser.add_argument(
-        "--scale",
-        type=float,
-        default=DEFAULT_SCALE,
-        help=f"Flow estimation scale (default: {DEFAULT_SCALE}; use 0.5 for 1080p+/4K)"
-        );
-
-    parser.add_argument(
         "--mute",
         action="store_true",
         help="Omit audio from the output video"
+        );
+
+    parser.add_argument(
+        "--skip",
+        action="store_true",
+        help="Skip processing if output is newer than input"
         );
 
     return parser.parse_args();
@@ -1271,6 +1303,209 @@ def validate_slowdown_factor(
             file=sys.stderr
             );
         sys.exit( 1 );
+
+# ~~
+
+def should_skip_output(
+    input_video_file_path: Path,
+    output_video_file_path: Path
+    ) -> bool:
+
+    if not output_video_file_path.is_file():
+
+        return False;
+
+    try:
+
+        input_modified_time = input_video_file_path.stat().st_mtime;
+        output_modified_time = output_video_file_path.stat().st_mtime;
+
+    except OSError:
+
+        return False;
+
+    return output_modified_time >= input_modified_time;
+
+# ~~
+
+def validate_crop_distances(
+    input_width: int,
+    input_height: int,
+    left_distance: float,
+    right_distance: float,
+    top_distance: float,
+    bottom_distance: float
+    ) -> None:
+
+    crop_distance_list = (
+        left_distance,
+        right_distance,
+        top_distance,
+        bottom_distance
+        );
+
+    if any( crop_distance < 0 for crop_distance in crop_distance_list ):
+
+        print(
+            "Crop distances must be greater than or equal to 0.",
+            file=sys.stderr
+            );
+        sys.exit( 1 );
+
+    cropped_width, cropped_height = (
+        get_cropped_dimensions(
+            input_width,
+            input_height,
+            left_distance,
+            right_distance,
+            top_distance,
+            bottom_distance
+            )
+        );
+
+    if cropped_width <= 0 or cropped_height <= 0:
+
+        print(
+            "Crop distances remove the entire frame.",
+            file=sys.stderr
+            );
+        sys.exit( 1 );
+
+# ~~
+
+def get_crop_distance_in_pixels(
+    crop_distance: float,
+    image_dimension: int
+    ) -> int:
+
+    if crop_distance < 1:
+
+        return int( round( image_dimension * crop_distance ) );
+
+    return int( round( crop_distance ) );
+
+# ~~
+
+def get_cropped_dimensions(
+    input_width: int,
+    input_height: int,
+    left_distance: float,
+    right_distance: float,
+    top_distance: float,
+    bottom_distance: float
+    ) -> tuple[ int, int ]:
+
+    left_pixels = get_crop_distance_in_pixels( left_distance, input_width );
+    right_pixels = get_crop_distance_in_pixels( right_distance, input_width );
+    top_pixels = get_crop_distance_in_pixels( top_distance, input_height );
+    bottom_pixels = get_crop_distance_in_pixels( bottom_distance, input_height );
+
+    cropped_width = input_width - left_pixels - right_pixels;
+    cropped_height = input_height - top_pixels - bottom_pixels;
+
+    return cropped_width, cropped_height;
+
+# ~~
+
+def get_cropped_frame(
+    frame_array: np.ndarray,
+    left_distance: float,
+    right_distance: float,
+    top_distance: float,
+    bottom_distance: float
+    ) -> np.ndarray:
+
+    height, width = frame_array.shape[ :2 ];
+    left_pixels = get_crop_distance_in_pixels( left_distance, width );
+    right_pixels = get_crop_distance_in_pixels( right_distance, width );
+    top_pixels = get_crop_distance_in_pixels( top_distance, height );
+    bottom_pixels = get_crop_distance_in_pixels( bottom_distance, height );
+
+    return (
+        frame_array[
+            top_pixels:height - bottom_pixels,
+            left_pixels:width - right_pixels
+            ]
+        );
+
+# ~~
+
+def get_output_dimensions(
+    input_width: int,
+    input_height: int,
+    maximum_width: int,
+    maximum_height: int
+    ) -> tuple[ int, int ]:
+
+    output_width = input_width;
+    output_height = input_height;
+
+    if maximum_width == 0 and maximum_height == 0:
+
+        return output_width, output_height;
+
+    aspect_ratio = output_width / output_height;
+
+    if maximum_width > 0 and output_width > maximum_width:
+
+        output_width = maximum_width;
+        output_height = int( round( output_width / aspect_ratio ) );
+
+    if maximum_height > 0 and output_height > maximum_height:
+
+        output_height = maximum_height;
+        output_width = int( round( output_height * aspect_ratio ) );
+
+    return output_width, output_height;
+
+# ~~
+
+def get_resized_frame(
+    frame_array: np.ndarray,
+    output_width: int,
+    output_height: int
+    ) -> np.ndarray:
+
+    return cv2.resize(
+        frame_array,
+        ( output_width, output_height ),
+        interpolation=cv2.INTER_LANCZOS4
+        );
+
+# ~~
+
+def prepare_output_frame(
+    frame_array: np.ndarray,
+    left_crop_distance: float,
+    right_crop_distance: float,
+    top_crop_distance: float,
+    bottom_crop_distance: float,
+    output_width: int,
+    output_height: int
+    ) -> np.ndarray:
+
+    cropped_frame_array = (
+        get_cropped_frame(
+            frame_array,
+            left_crop_distance,
+            right_crop_distance,
+            top_crop_distance,
+            bottom_crop_distance
+            )
+        );
+
+    if (
+        cropped_frame_array.shape[ 1 ] != output_width
+        or cropped_frame_array.shape[ 0 ] != output_height
+        ):
+
+        return get_resized_frame(
+            cropped_frame_array,
+            output_width,
+            output_height
+            );
+
+    return cropped_frame_array;
 
 # ~~
 
@@ -1355,8 +1590,14 @@ def slowdown_mp4(
     output_video_file_path: Path,
     model: RifeModel,
     slowdown_factor: int,
+    flow_estimation_scale: float,
     compression: int,
-    scale: float,
+    left_crop_distance: float,
+    right_crop_distance: float,
+    top_crop_distance: float,
+    bottom_crop_distance: float,
+    maximum_width: int,
+    maximum_height: int,
     mute: bool = False
     ) -> None:
 
@@ -1381,17 +1622,47 @@ def slowdown_mp4(
 
     video_reader = VideoReader( video_reader_argument_namespace );
     input_height, input_width = video_reader.get_resolution();
+
+    validate_crop_distances(
+        input_width,
+        input_height,
+        left_crop_distance,
+        right_crop_distance,
+        top_crop_distance,
+        bottom_crop_distance
+        );
+
+    cropped_width, cropped_height = (
+        get_cropped_dimensions(
+            input_width,
+            input_height,
+            left_crop_distance,
+            right_crop_distance,
+            top_crop_distance,
+            bottom_crop_distance
+            )
+        );
+
+    output_width, output_height = (
+        get_output_dimensions(
+            cropped_width,
+            cropped_height,
+            maximum_width,
+            maximum_height
+            )
+        );
+
     input_frames_per_second = video_reader.get_fps();
     has_audio = video_reader.has_audio_stream() and not mute;
 
-    if scale not in ( 0.25, 0.5, 1.0, 2.0, 4.0 ):
+    if flow_estimation_scale not in ( 0.25, 0.5, 1.0, 2.0, 4.0 ):
 
         print(
-            f"Warning: unusual flow estimation scale {scale}; recommended values are 0.25, 0.5, 1.0, 2.0, 4.0",
+            f"Warning: unusual flow estimation scale {flow_estimation_scale}; recommended values are 0.25, 0.5, 1.0, 2.0, 4.0",
             file=sys.stderr
             );
 
-    frame_padding_tuple = get_padding( input_height, input_width, scale );
+    frame_padding_tuple = get_padding( cropped_height, cropped_width, flow_estimation_scale );
     device = model.to_device();
 
     video_only_file_path = (
@@ -1410,8 +1681,8 @@ def slowdown_mp4(
         video_writer = (
             VideoWriter(
                 video_writer_argument_namespace,
-                input_height,
-                input_width,
+                output_height,
+                output_width,
                 str( video_only_file_path ),
                 input_frames_per_second,
                 video_reader.get_display_aspect_ratio(),
@@ -1426,6 +1697,15 @@ def slowdown_mp4(
             print( "Input video contains no frames.", file=sys.stderr );
             sys.exit( 1 );
 
+        first_frame_array = (
+            get_cropped_frame(
+                first_frame_array,
+                left_crop_distance,
+                right_crop_distance,
+                top_crop_distance,
+                bottom_crop_distance
+                )
+            );
         last_frame_array = first_frame_array;
         last_frame_tensor = get_padded_frame_tensor(
             get_tensor_from_frame( last_frame_array, device ),
@@ -1440,7 +1720,17 @@ def slowdown_mp4(
                 )
             );
 
-        video_writer.write_frame( last_frame_array );
+        video_writer.write_frame(
+            prepare_output_frame(
+                last_frame_array,
+                0,
+                0,
+                0,
+                0,
+                output_width,
+                output_height
+                )
+            );
         progress_bar.update( 1 );
 
         intermediate_frame_count = slowdown_factor - 1;
@@ -1452,6 +1742,16 @@ def slowdown_mp4(
             if next_frame_array is None:
 
                 break;
+
+            next_frame_array = (
+                get_cropped_frame(
+                    next_frame_array,
+                    left_crop_distance,
+                    right_crop_distance,
+                    top_crop_distance,
+                    bottom_crop_distance
+                    )
+                );
 
             first_frame_tensor = last_frame_tensor;
             second_frame_tensor = get_padded_frame_tensor(
@@ -1496,7 +1796,15 @@ def slowdown_mp4(
 
                 else:
 
-                    working_frame_array = skipped_frame_array;
+                    working_frame_array = (
+                        get_cropped_frame(
+                            skipped_frame_array,
+                            left_crop_distance,
+                            right_crop_distance,
+                            top_crop_distance,
+                            bottom_crop_distance
+                            )
+                        );
                     working_frame_tensor = get_padded_frame_tensor(
                         get_tensor_from_frame( working_frame_array, device ),
                         frame_padding_tuple
@@ -1504,7 +1812,7 @@ def slowdown_mp4(
                     working_frame_tensor = model.inference(
                         first_frame_tensor,
                         working_frame_tensor,
-                        scale=scale
+                        scale=flow_estimation_scale
                         );
                     working_frame_tensor_small = (
                         F.interpolate(
@@ -1520,8 +1828,8 @@ def slowdown_mp4(
                         );
                     working_frame_array = get_frame_from_tensor(
                         working_frame_tensor,
-                        input_height,
-                        input_width
+                        cropped_height,
+                        cropped_width
                         );
 
             if structural_similarity_value < 0.2:
@@ -1539,14 +1847,14 @@ def slowdown_mp4(
                         first_frame_tensor,
                         working_frame_tensor,
                         intermediate_frame_count,
-                        scale
+                        flow_estimation_scale
                         );
 
                 except RuntimeError as runtime_error:
 
                     print( f"Error: {runtime_error}", file=sys.stderr );
                     print(
-                        "Try again with --scale 0.5.",
+                        "Try again with --flow-estimation-scale 0.5.",
                         file=sys.stderr
                         );
 
@@ -1559,14 +1867,32 @@ def slowdown_mp4(
             for intermediate_output_tensor in intermediate_output_tensor_list:
 
                 video_writer.write_frame(
-                    get_frame_from_tensor(
-                        intermediate_output_tensor,
-                        input_height,
-                        input_width
+                    prepare_output_frame(
+                        get_frame_from_tensor(
+                            intermediate_output_tensor,
+                            cropped_height,
+                            cropped_width
+                            ),
+                        0,
+                        0,
+                        0,
+                        0,
+                        output_width,
+                        output_height
                         )
                     );
 
-            video_writer.write_frame( working_frame_array );
+            video_writer.write_frame(
+                prepare_output_frame(
+                    working_frame_array,
+                    0,
+                    0,
+                    0,
+                    0,
+                    output_width,
+                    output_height
+                    )
+                );
 
             if device.type == "cuda":
 
@@ -1610,7 +1936,24 @@ def main(
     validate_runtime();
     validate_input_video_file_path( arguments.input_video_file_path );
     validate_output_video_file_path( arguments.output_video_file_path );
-    validate_slowdown_factor( arguments.factor );
+    validate_slowdown_factor( arguments.slowdown_factor );
+
+    if (
+        arguments.skip
+        and should_skip_output(
+            arguments.input_video_file_path,
+            arguments.output_video_file_path
+            )
+        ):
+
+        print( f"Skipping {arguments.output_video_file_path}" );
+        return;
+
+    left_crop_distance, right_crop_distance, top_crop_distance, bottom_crop_distance = (
+        arguments.crop
+        if arguments.crop is not None
+        else ( 0, 0, 0, 0 )
+        );
 
     if not torch.cuda.is_available():
 
@@ -1629,9 +1972,15 @@ def main(
         arguments.input_video_file_path,
         arguments.output_video_file_path,
         model,
-        slowdown_factor=arguments.factor,
+        slowdown_factor=arguments.slowdown_factor,
+        flow_estimation_scale=arguments.flow_estimation_scale,
         compression=arguments.compression,
-        scale=arguments.scale,
+        left_crop_distance=left_crop_distance,
+        right_crop_distance=right_crop_distance,
+        top_crop_distance=top_crop_distance,
+        bottom_crop_distance=bottom_crop_distance,
+        maximum_width=arguments.max_width,
+        maximum_height=arguments.max_height,
         mute=arguments.mute
         );
 
