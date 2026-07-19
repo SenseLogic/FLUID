@@ -10,6 +10,7 @@ try:
     import argparse;
     import cv2;
     import ffmpeg;
+    import math;
     import mimetypes;
     import numpy as np;
     from math import exp;
@@ -1111,6 +1112,104 @@ def get_video_aspect_ratio_output_options(
 
 # ~~
 
+def get_output_aspect_ratios(
+    output_width: int,
+    output_height: int,
+    input_width: int,
+    input_height: int,
+    display_aspect_ratio: str | None,
+    sample_aspect_ratio: str | None
+    ) -> tuple[ str | None, str | None ]:
+
+    if output_width == input_width and output_height == input_height:
+
+        return display_aspect_ratio, sample_aspect_ratio;
+
+    # Uniform scale keeps the same picture aspect; crop does not.
+    if output_width * input_height == input_width * output_height:
+
+        return display_aspect_ratio, sample_aspect_ratio;
+
+    # Crop/resize changed the frame geometry: do not reuse the source DAR.
+    # Keep SAR when known so anamorphic pixels stay correct; otherwise set
+    # DAR from the new pixel dimensions (square pixels).
+    if is_valid_aspect_ratio( sample_aspect_ratio ):
+
+        return None, sample_aspect_ratio;
+
+    if is_valid_aspect_ratio( display_aspect_ratio ):
+
+        return (
+            get_resized_display_aspect_ratio(
+                display_aspect_ratio,
+                input_width,
+                input_height,
+                output_width,
+                output_height
+                ),
+            None
+            );
+
+    return f"{output_width}:{output_height}", None;
+
+# ~~
+
+def get_aspect_ratio_parts(
+    aspect_ratio: str
+    ) -> tuple[ int, int ] | None:
+
+    try:
+
+        numerator_text, denominator_text = aspect_ratio.split( ":", 1 );
+        numerator = int( numerator_text );
+        denominator = int( denominator_text );
+
+    except ValueError:
+
+        return None;
+
+    if numerator <= 0 or denominator <= 0:
+
+        return None;
+
+    return numerator, denominator;
+
+# ~~
+
+def get_simplified_aspect_ratio(
+    numerator: int,
+    denominator: int
+    ) -> str:
+
+    common_divisor = math.gcd( numerator, denominator );
+
+    return f"{numerator // common_divisor}:{denominator // common_divisor}";
+
+# ~~
+
+def get_resized_display_aspect_ratio(
+    display_aspect_ratio: str,
+    input_width: int,
+    input_height: int,
+    output_width: int,
+    output_height: int
+    ) -> str:
+
+    aspect_ratio_parts = get_aspect_ratio_parts( display_aspect_ratio );
+
+    if aspect_ratio_parts is None:
+
+        return f"{output_width}:{output_height}";
+
+    display_width, display_height = aspect_ratio_parts;
+
+    return get_simplified_aspect_ratio(
+        display_width * output_width * input_height,
+        display_height * output_height * input_width
+        );
+
+# ~~
+
 def get_video_meta_info(
     input_video_file_path: str
     ) -> dict[str, Any]:
@@ -1671,6 +1770,17 @@ def slowdown_mp4(
         else output_video_file_path
         );
 
+    output_display_aspect_ratio, output_sample_aspect_ratio = (
+        get_output_aspect_ratios(
+            output_width,
+            output_height,
+            input_width,
+            input_height,
+            video_reader.get_display_aspect_ratio(),
+            video_reader.get_sample_aspect_ratio()
+            )
+        );
+
     video_writer = None;
     progress_bar = None;
 
@@ -1685,8 +1795,8 @@ def slowdown_mp4(
                 output_width,
                 str( video_only_file_path ),
                 input_frames_per_second,
-                video_reader.get_display_aspect_ratio(),
-                video_reader.get_sample_aspect_ratio()
+                output_display_aspect_ratio,
+                output_sample_aspect_ratio
                 )
             );
 

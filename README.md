@@ -26,6 +26,7 @@ fluid_uv <input video file path> <output video file path> [<options>]
 --max-height <maximum_height=0>
 --compression <compression=22>
 --mute
+--skip
 ```
 
 ## Sample
