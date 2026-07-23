@@ -57,7 +57,7 @@ Run `install_ffmpeg.bat` then `install_packages.bat` or `install_uv_packages.bat
 
 ## Dependencies
 
-- Python 3.10.11
+- Python 3.11.9
 - CUDA 12.4 (optional; CPU fallback)
 - ffmpeg (in the path)
 - RIFE 4.25 (`flownet.pkl`)

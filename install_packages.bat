@@ -1,5 +1,5 @@
 pushd "%~dp0"
-echo requires python 3.10.11
+echo requires python 3.11.9
 echo requires CUDA 12.4
 python.exe --version
 python.exe -m pip install --upgrade pip
