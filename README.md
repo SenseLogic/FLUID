@@ -27,7 +27,12 @@ fluid_uv <input video file path> <output video file path> [<options>]
 --compression <compression=22>
 --mute
 --skip
+--cpu
+--cuda
+--rocm
 ```
+
+If none of `--cpu`, `--cuda`, or `--rocm` is passed, Fluid uses CUDA when available, otherwise ROCm when available, otherwise CPU.
 
 ## Sample
 
@@ -53,12 +58,16 @@ fluid input_video.mp4 output_video.mp4 --mute
 
 ## Install
 
-Run `install_ffmpeg.bat` then `install_packages.bat` or `install_uv_packages.bat`.
+Run `install_ffmpeg.bat`, then one of:
+
+- `install_packages_cuda.bat` / `install_uv_packages_cuda.bat` — NVIDIA CUDA
+- `install_packages_rocm.bat` / `install_uv_packages_rocm.bat` — AMD ROCm
+- `install_packages_cpu.bat` / `install_uv_packages_cpu.bat` — CPU only
 
 ## Dependencies
 
-- Python 3.11.9
-- CUDA 12.4 (optional; CPU fallback)
+- Python 3.12.10
+- CUDA 12.4 (NVIDIA) or ROCm 7.2.1 (AMD), optional
 - ffmpeg (in the path)
 - RIFE 4.25 (`flownet.pkl`)
 

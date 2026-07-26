@@ -28,7 +28,7 @@ except ImportError as import_error:
 
     print( f"Missing dependency: {import_error}", file=sys.stderr );
     print( "Install with:", file=sys.stderr );
-    print( "  run install_packages.bat", file=sys.stderr );
+    print( "  run install_packages_cuda.bat, install_packages_rocm.bat, or install_packages_cpu.bat", file=sys.stderr );
     sys.exit( 1 );
 
 warnings.filterwarnings( "ignore" );
@@ -386,9 +386,7 @@ class RifeModel:
 
         self.flownet = IntermediateFrameNetwork();
         self.version = MODEL_VERSION;
-        self._device = torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu"
-            );
+        self._device = torch.device( "cpu" );
 
     # -- OPERATIONS
 
@@ -401,12 +399,14 @@ class RifeModel:
     # ~~
 
     def to_device(
-        self
+        self,
+        device: torch.device | None = None
         ) -> torch.device:
 
-        self._device = torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu"
-            );
+        if device is not None:
+
+            self._device = device;
+
         self.flownet.to( self._device );
 
         return self._device;
@@ -415,7 +415,8 @@ class RifeModel:
 
     def load_weights(
         self,
-        model_folder_path: Path | str
+        model_folder_path: Path | str,
+        map_location: str | torch.device | None = None
         ) -> None:
 
         model_weights_file_path = Path( model_folder_path ) / MODEL_NAME;
@@ -426,9 +427,13 @@ class RifeModel:
                 f"RIFE weights not found: {model_weights_file_path}"
                 );
 
+        if map_location is None:
+
+            map_location = self._device;
+
         state_dict = torch.load(
             model_weights_file_path,
-            map_location=( "cuda" if torch.cuda.is_available() else "cpu" )
+            map_location=map_location
             );
         state_dict_by_parameter_name_dictionary = {
             state_dict_key.replace( "module.", "" ): state_dict_value
@@ -1030,8 +1035,90 @@ def get_intermediate_frame_tensor_list(
 
 # ~~
 
+def is_rocm_pytorch(
+    ) -> bool:
+
+    return getattr( torch.version, "hip", None ) is not None;
+
+# ~~
+
+def is_nvidia_cuda_available(
+    ) -> bool:
+
+    return torch.cuda.is_available() and not is_rocm_pytorch();
+
+# ~~
+
+def is_amd_rocm_available(
+    ) -> bool:
+
+    return torch.cuda.is_available() and is_rocm_pytorch();
+
+# ~~
+
+def resolve_compute_backend(
+    requested_compute_backend: str | None
+    ) -> str:
+
+    nvidia_cuda_is_available = is_nvidia_cuda_available();
+    amd_rocm_is_available = is_amd_rocm_available();
+
+    if requested_compute_backend == "cpu":
+
+        return "cpu";
+
+    if requested_compute_backend == "cuda":
+
+        if not nvidia_cuda_is_available:
+
+            print( "CUDA was requested but is not available.", file=sys.stderr );
+            sys.exit( 1 );
+
+        return "cuda";
+
+    if requested_compute_backend == "rocm":
+
+        if not amd_rocm_is_available:
+
+            print( "ROCm was requested but is not available.", file=sys.stderr );
+            sys.exit( 1 );
+
+        return "rocm";
+
+    if nvidia_cuda_is_available:
+
+        return "cuda";
+
+    if amd_rocm_is_available:
+
+        return "rocm";
+
+    return "cpu";
+
+# ~~
+
+def get_torch_device_for_compute_backend(
+    compute_backend: str
+    ) -> torch.device:
+
+    if compute_backend == "cpu":
+
+        print( "Using CPU (slow).", file=sys.stderr );
+        return torch.device( "cpu" );
+
+    if compute_backend == "cuda":
+
+        print( "Using CUDA.", file=sys.stderr );
+        return torch.device( "cuda" );
+
+    print( "Using ROCm.", file=sys.stderr );
+    return torch.device( "cuda" );
+
+# ~~
+
 def get_rife_model(
-    model_folder_path: Path | None = None
+    model_folder_path: Path | None = None,
+    device: torch.device | None = None
     ) -> RifeModel:
 
     resolved_model_folder_path = (
@@ -1054,9 +1141,9 @@ def get_rife_model(
         sys.exit( 1 );
 
     model = RifeModel();
-    model.load_weights( resolved_model_folder_path );
+    model.load_weights( resolved_model_folder_path, map_location=device );
     model.eval();
-    model.to_device();
+    model.to_device( device );
 
     return model;
 
@@ -1329,6 +1416,34 @@ def parse_arguments(
         action="store_true",
         help="Skip processing if output is newer than input"
         );
+
+    compute_backend_group = parser.add_mutually_exclusive_group();
+
+    compute_backend_group.add_argument(
+        "--cpu",
+        action="store_const",
+        const="cpu",
+        dest="compute_backend",
+        help="Force CPU computation"
+        );
+
+    compute_backend_group.add_argument(
+        "--cuda",
+        action="store_const",
+        const="cuda",
+        dest="compute_backend",
+        help="Force NVIDIA CUDA computation"
+        );
+
+    compute_backend_group.add_argument(
+        "--rocm",
+        action="store_const",
+        const="rocm",
+        dest="compute_backend",
+        help="Force AMD ROCm computation"
+        );
+
+    parser.set_defaults( compute_backend=None );
 
     return parser.parse_args();
 
@@ -2065,18 +2180,17 @@ def main(
         else ( 0, 0, 0, 0 )
         );
 
-    if not torch.cuda.is_available():
-
-        print( "CUDA not available; using CPU (slow).", file=sys.stderr );
+    compute_backend = resolve_compute_backend( arguments.compute_backend );
+    device = get_torch_device_for_compute_backend( compute_backend );
 
     torch.set_grad_enabled( False );
 
-    if torch.cuda.is_available():
+    if compute_backend in ( "cuda", "rocm" ):
 
         torch.backends.cudnn.enabled = True;
         torch.backends.cudnn.benchmark = True;
 
-    model = get_rife_model( MODEL_FOLDER_PATH );
+    model = get_rife_model( MODEL_FOLDER_PATH, device=device );
 
     slowdown_mp4(
         arguments.input_video_file_path,
