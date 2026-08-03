@@ -24,7 +24,7 @@ fluid_uv <input video file path> <output video file path> [<options>]
 --crop <left_distance> <right_distance> <top_distance> <bottom_distance>
 --max-width <maximum_width=0>
 --max-height <maximum_height=0>
---compression <compression=22>
+--compression <compression=20>
 --mute
 --skip
 --cpu
@@ -45,11 +45,11 @@ fluid input_video.mp4 output_video.mp4 --slowdown-factor 2
 ```
 
 ```
-fluid input_video.mp4 output_video.mp4 --compression 22
+fluid input_video.mp4 output_video.mp4 --compression 20
 ```
 
 ```
-fluid input_video.mp4 output_video.mp4 --slowdown-factor 8 --compression 22 --flow-estimation-scale 0.5
+fluid input_video.mp4 output_video.mp4 --slowdown-factor 8 --compression 20 --flow-estimation-scale 0.5
 ```
 
 ```
